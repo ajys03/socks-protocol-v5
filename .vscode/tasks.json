@@ -5,7 +5,7 @@
 		"label": "build",
 		"type": "shell",
 		"command": "g++",
-		"args": ["-g", "proxy_server.cpp", "-o", "proxy_server"],
+		"args": ["-g", "main.cpp", "-o", "proxy_server"],
 		"group": {
 		  "kind": "build",
 		  "isDefault": true
