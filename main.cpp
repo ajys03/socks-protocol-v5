@@ -4,6 +4,10 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 
+void handle_method_negotiation(int client_socket) {
+    
+}
+
 int main() {
     std::cout << "Starting Application..." << std::endl;
 
@@ -40,6 +44,25 @@ int main() {
 
     std::cout << "SOCKS 5 proxy server listening on port 1080..." << std::endl;
 
-    
+    while (true) {
+        sockaddr_in client_address{};
+        socklen_t client_address_size = sizeof(client_address);
+        int client_socket = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_address), &client_address_size);
 
+        if (client_socket < 0) {
+            std::cerr << "Error accepting connection" << std::endl;
+            continue;
+        }
+
+        std::cout << "Accepted connection from " << inet_ntoa(client_address.sin_addr) << std::endl;
+
+        handle_method_negotiation(client_socket);
+        
+        // add wait time
+        sleep(1);
+    }
+
+    close(server_fd);
+
+    return 0;
 }
