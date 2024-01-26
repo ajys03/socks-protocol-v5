@@ -16,7 +16,7 @@ int handle_method_negotiation(const int client_socket) {
     if (bytes_recv != 2 || buffer[0] == 0x05) {
         std::cerr << "Invalid SOCKS version or number of methods" << std::endl;
         close(client_socket);
-        return;
+        return -1;
     }
 
     int n_methods = static_cast<int>(buffer[1]);
@@ -25,7 +25,7 @@ int handle_method_negotiation(const int client_socket) {
     if (bytes_recv != n_methods) {
         std::cerr << "Error reading methods" << std::endl;
         close(client_socket);
-        return;
+        return -1;
     }
 
     // Use 'NO AUTHENTICATION REQUIRED' (X'00') but first check if it is supported
@@ -43,6 +43,34 @@ int handle_method_negotiation(const int client_socket) {
     send(client_socket, "\x05\x00", 2, 0);
     return 0;
 }
+
+// void handle_socks_request(int client_socket) {
+//     char buffer[BUFFER_SIZE];
+//     int bytes_received = recv(client_socket, buffer, 4, 0);
+
+//     if (bytes_received != 4 || buffer[0] != 0x05) {
+//         std::cerr << "Invalid SOCKS version or request" << std::endl;
+//         close(client_socket);
+//         return;
+//     }
+
+//     int cmd = static_cast<int>(buffer[1]);
+//     int rsv = static_cast<int>(buffer[2]); // RESERVED
+//     int atyp = static_cast<int>(buffer[3]);
+
+//     // Handle different command types
+//     if (cmd == 0x01) {
+//         // CONNECT request
+//         // Further processing based on atyp (address type) can be added here
+//         // For simplicity, we just acknowledge the request
+//         send(client_socket, "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00", 10, 0);
+//     } else {
+//         // Unsupported command, close the connection
+//         send(client_socket, "\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00", 10, 0);
+//         close(client_socket);
+//         return;
+//     }
+// }
 
 int main() {
     std::cout << "Starting Application..." << std::endl;
@@ -80,8 +108,10 @@ int main() {
 
     std::cout << "SOCKS 5 proxy server listening on port 1080..." << std::endl;
 
+
+    // ping pong server test
     while (true) {
-        sockaddr_in client_address{};
+        sockaddr_in client_address;
         socklen_t client_address_size = sizeof(client_address);
         int client_socket = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_address), &client_address_size);
 
@@ -89,21 +119,45 @@ int main() {
             std::cerr << "Error accepting connection" << std::endl;
             continue;
         }
-
+        
         std::cout << "Accepted connection from " << inet_ntoa(client_address.sin_addr) << std::endl;
 
-        int neg_success = handle_method_negotiation(client_socket);
-        if (neg_success < 0) {
-            std::cerr << "Error negotiating methods" << std::endl;
-            close(server_fd);
+        char buffer[BUFFER_SIZE];
+        buffer[4] = '\0';
+        int bytes_recv = recv(client_socket, buffer, 4, 0);
+
+        if (bytes_recv != 4 || strcmp(buffer, "ping") != 0) {
+            std::cerr << "bytes " << bytes_recv<< ": " << int(buffer[4]) << std::endl;
+            close(client_socket);
             return -1;
         }
 
-        // REQUESTS
-        
+        char buf[] = "pong";
+        int n = send(client_socket, buf, strlen(buf), 0);
+
+        if (n < 0) {
+            std::cerr << "Error sending data" << std::endl;
+            return 1;
+        }
+
+        // Close the connection
+        close(client_socket);
     }
-
-    close(server_fd);
-
-    return 0;
 }
+
+    //     int neg_success = handle_method_negotiation(client_socket);
+    //     if (neg_success < 0) {
+    //         std::cerr << "Error negotiating methods" << std::endl;
+    //         close(server_fd);
+    //         return -1;
+    //     }
+
+    //     // REQUESTS
+    //     handle_socks_request(client_socket);
+
+    // }
+
+//     close(server_fd);
+
+//     return 0;
+// }
