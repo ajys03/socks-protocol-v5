@@ -44,33 +44,57 @@ int handle_method_negotiation(const int client_socket) {
     return 0;
 }
 
-// void handle_socks_request(int client_socket) {
-//     char buffer[BUFFER_SIZE];
-//     int bytes_received = recv(client_socket, buffer, 4, 0);
+void handle_socks_request(int client_socket) {
+    char buffer[BUFFER_SIZE];
+    int bytes_received = recv(client_socket, buffer, 4, 0);
 
-//     if (bytes_received != 4 || buffer[0] != 0x05) {
-//         std::cerr << "Invalid SOCKS version or request" << std::endl;
-//         close(client_socket);
-//         return;
-//     }
+    if (bytes_received != 4 || buffer[0] != 0x05) {
+        std::cerr << "Invalid SOCKS version or request" << std::endl;
+        close(client_socket);
+        return;
+    }
 
-//     int cmd = static_cast<int>(buffer[1]);
-//     int rsv = static_cast<int>(buffer[2]); // RESERVED
-//     int atyp = static_cast<int>(buffer[3]);
+    int cmd = static_cast<int>(buffer[1]);
+    int rsv = static_cast<int>(buffer[2]); // RESERVED
+    int atyp = static_cast<int>(buffer[3]);
 
-//     // Handle different command types
-//     if (cmd == 0x01) {
-//         // CONNECT request
-//         // Further processing based on atyp (address type) can be added here
-//         // For simplicity, we just acknowledge the request
-//         send(client_socket, "\x05\x00\x00\x01\x00\x00\x00\x00\x00\x00", 10, 0);
-//     } else {
-//         // Unsupported command, close the connection
-//         send(client_socket, "\x05\x07\x00\x01\x00\x00\x00\x00\x00\x00", 10, 0);
-//         close(client_socket);
-//         return;
-//     }
-// }
+    // Handle different command types
+    if (cmd == 0x01) { // connect request
+
+        // Determine address type based on ATYP
+        if (atyp == 0x01) {
+            // IPv4 address
+            char ipv4_addr[4];
+            bytes_received = recv(client_socket, ipv4_addr, 4, 0);
+            if (bytes_received != 4) {
+                std::cerr << "Error reading IPv4 address" << std::endl;
+                close(client_socket);
+                return;
+            }
+        } else if (atyp == 0x03) {
+            // Domain name
+            char domain_length[1];
+            bytes_received = recv(client_socket, domain_length, 1, 0);
+            if (bytes_received != 1) {
+                std::cerr << "Error reading domain length" << std::endl;
+                close(client_socket);
+                return;
+            }
+            int domain_length_int = static_cast<int>(domain_length[0]);
+            char domain_name[256];
+            bytes_received = recv(client_socket, domain_name, domain_length_int, 0);
+            if (bytes_received != domain_length_int) {
+                std::cerr << "Error reading domain name" << std::endl;
+                close(client_socket);
+                return;
+            }
+            domain_name[domain_length_int] = '\0';
+        } else if (atyp == 0x04) {
+            // IPv6 address
+            // TODO: work on IPv6
+        } 
+    }
+}
 
 int main() {
     std::cout << "Starting Application..." << std::endl;
@@ -108,8 +132,6 @@ int main() {
 
     std::cout << "SOCKS 5 proxy server listening on port 1080..." << std::endl;
 
-
-    // ping pong server test
     while (true) {
         sockaddr_in client_address;
         socklen_t client_address_size = sizeof(client_address);
@@ -122,42 +144,21 @@ int main() {
         
         std::cout << "Accepted connection from " << inet_ntoa(client_address.sin_addr) << std::endl;
 
-        char buffer[BUFFER_SIZE];
-        buffer[4] = '\0';
-        int bytes_recv = recv(client_socket, buffer, 4, 0);
-
-        if (bytes_recv != 4 || strcmp(buffer, "ping") != 0) {
-            std::cerr << "bytes " << bytes_recv<< ": " << int(buffer[4]) << std::endl;
-            close(client_socket);
+        // HANDLE METHOD NEGOTIATION
+        int neg_success = handle_method_negotiation(client_socket);
+        if (neg_success < 0) {
+            std::cerr << "Error negotiating methods" << std::endl;
+            close(server_fd);
             return -1;
         }
 
-        char buf[] = "pong";
-        int n = send(client_socket, buf, strlen(buf), 0);
+        // REQUESTS
+        handle_socks_request(client_socket);
 
-        if (n < 0) {
-            std::cerr << "Error sending data" << std::endl;
-            return 1;
-        }
 
-        // Close the connection
-        close(client_socket);
     }
+
+    close(server_fd);
+
+    return 0;
 }
-
-    //     int neg_success = handle_method_negotiation(client_socket);
-    //     if (neg_success < 0) {
-    //         std::cerr << "Error negotiating methods" << std::endl;
-    //         close(server_fd);
-    //         return -1;
-    //     }
-
-    //     // REQUESTS
-    //     handle_socks_request(client_socket);
-
-    // }
-
-//     close(server_fd);
-
-//     return 0;
-// }
