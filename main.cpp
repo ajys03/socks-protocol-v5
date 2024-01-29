@@ -79,7 +79,7 @@ void bidirec_traffic(int client_socket, int tcp_client) {
             break;
         }
 
-        // Forward data from local to remote
+        // Forward data from client_socket to tcp_client
         if (FD_ISSET(client_socket, &fds)) {
             bytesRead = recv(client_socket, buffer, BUFFER_SIZE, 0);
             if (bytesRead <= 0) {
@@ -88,7 +88,7 @@ void bidirec_traffic(int client_socket, int tcp_client) {
             send(tcp_client, buffer, bytesRead, 0);
         }
 
-        // Forward data from remote to local
+        // Forward data from tcp_client to client_socket
         if (FD_ISSET(tcp_client, &fds)) {
             bytesRead = recv(tcp_client, buffer, BUFFER_SIZE, 0);
             if (bytesRead <= 0) {
