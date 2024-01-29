@@ -5,12 +5,33 @@
 #include <arpa/inet.h>
 
 #define BUFFER_SIZE 4096
+const uint8_t SOCKS5VER = 0x05;
+const uint8_t RESERVED = 0x00;
+
+// std::string domain_to_ipv4(std::string domain_name) {
+//     // Convert the domain name to an IP address.
+//     struct sockaddr_in addr;
+//     addr.sin_family = AF_INET;
+//     addr.sin_port = htons(80); // Port 80 is the default HTTP port.
+//     addr.sin_addr.s_addr = inet_addr(domain_name.c_str());
+
+//     // Check if the IP address is valid.
+//     if (addr.sin_addr.s_addr == INADDR_NONE) {
+//         std::cerr << "Invalid domain name." << std::endl;
+//         return "error";
+//     }
+
+//     // Print the IP address to the console.
+//     std::cout << "The IP address for " << domain_name << " is " << inet_ntoa(addr.sin_addr) << std::endl;
+
+//     return inet_ntoa(addr.sin_addr);
+// }
 
 int handle_method_negotiation(const int client_socket) {
     char buffer[BUFFER_SIZE];
     int bytes_recv = recv(client_socket, buffer, 2, 0);
     
-    if (bytes_recv != 2 || buffer[0] != 0x05) {
+    if (bytes_recv != 2 || buffer[0] != SOCKS5VER) {
         std::cerr << "Invalid SOCKS version or number of methods" << std::endl;
         close(client_socket);
         return -1;
@@ -74,6 +95,7 @@ std::string get_atyp_info(int atyp, int client_socket) {
         }
         // does not come with null terminating
         domain_name[domain_length_int] = '\0';
+        // std::string domain_name_ipv4 = domain_to_ipv4(domain_name);
         return domain_name;
     } else if (atyp == 0x04) {
         // IPv6 address
@@ -95,28 +117,27 @@ std::string get_atyp_info(int atyp, int client_socket) {
 void handle_socks_request(int client_socket) {
     char buffer[BUFFER_SIZE];
     int bytes_received = recv(client_socket, buffer, 4, 0);
-
-    if (bytes_received != 4 || buffer[0] != 0x05) {
+    if (bytes_received != 4 || buffer[0] != SOCKS5VER) {
         std::cerr << "Invalid SOCKS version or request" << std::endl;
         close(client_socket);
         return;
     }
 
     int cmd = static_cast<int>(buffer[1]);
-    int rsv = static_cast<int>(buffer[2]); // RESERVED
+    int rsv = static_cast<int>(buffer[2]);
     int atyp = static_cast<int>(buffer[3]);
 
     std::string address = get_atyp_info(atyp, client_socket);
-    int port = recv(client_socket, buffer, 2, 0);
+    unsigned short port = recv(client_socket, buffer, 2, 0);
+    char response[] = {SOCKS5VER, 0x00, RESERVED, address[0], address[1], address[2], address[3], port};
+    if (cmd == 0x01) {
 
-    char response[] = {0x05, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-    // Handle different command types
-    if (cmd == 0x01) { // connect request
-        // absolute response
         send(client_socket, response, sizeof(response), 0);
     } else if (cmd == 0x02) {
-        // absolute response
-        send(client_socket, response, sizeof(response), 0);
+        // BIND - CURRENTLY NOT SUPPORTED
+        std::cerr << "Currently does not support BIND" << std::endl;
+        close(client_socket);
+        return;
     } else if (cmd == 0x03) {
         // UDP ASSOCIATE - WILL NOT IMPLEMENT
         std::cerr << "This Implemention skips UDP Associate" << std::endl;
@@ -181,8 +202,10 @@ int main() {
             return -1;
         }
 
-        // REQUESTS
+        // REQUESTS + REPLIES
         handle_socks_request(client_socket);
+
+        std::cout << "Completed SOCKS 5" << std::endl;
     }
 
     close(server_fd);
