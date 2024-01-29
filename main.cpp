@@ -63,6 +63,80 @@ int handle_method_negotiation(const int client_socket) {
     return 0;
 }
 
+void bidirec_traffic(int client_socket, int tcp_client) {
+    fd_set fds;
+    char buffer[BUFFER_SIZE];
+    int bytesRead;
+
+    while (true) {
+        FD_ZERO(&fds);
+        FD_SET(client_socket, &fds);
+        FD_SET(tcp_client, &fds);
+
+        // Wait for activity on either socket
+        if (select(std::max(client_socket, tcp_client) + 1, &fds, nullptr, nullptr, nullptr) < 0) {
+            std::cerr << "Error in select" << std::endl;
+            break;
+        }
+
+        // Forward data from local to remote
+        if (FD_ISSET(client_socket, &fds)) {
+            bytesRead = recv(client_socket, buffer, BUFFER_SIZE, 0);
+            if (bytesRead <= 0) {
+                break;
+            }
+            send(tcp_client, buffer, bytesRead, 0);
+        }
+
+        // Forward data from remote to local
+        if (FD_ISSET(tcp_client, &fds)) {
+            bytesRead = recv(tcp_client, buffer, BUFFER_SIZE, 0);
+            if (bytesRead <= 0) {
+                break;
+            }
+            send(client_socket, buffer, bytesRead, 0);
+        }
+    }
+}
+
+
+void tcp_client(int client_socket, std::string address, unsigned short port) {
+    int tcp_client = socket(AF_INET, SOCK_STREAM, 0);
+    if (tcp_client < 0) {
+        std::cerr << "Error creating local socket" << std::endl;
+        return;
+    }
+
+    sockaddr_in servaddr;
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_port = htons(0); // let system choose available port
+    servaddr.sin_addr.s_addr = INADDR_ANY;
+
+    int bind_success = bind(tcp_client, reinterpret_cast<struct sockaddr*>(&servaddr), sizeof(servaddr));
+    if (bind_success < 0) {
+        std::cerr << "Error binding server's client socket" << std::endl;
+        close(tcp_client);
+        return;
+    }
+
+    sockaddr_in remote_server;
+    remote_server.sin_family = AF_INET;
+    remote_server.sin_port = htons(port);
+    inet_pton(AF_INET, address.c_str(), &(remote_server.sin_addr));
+
+    if (connect(tcp_client, reinterpret_cast<struct sockaddr*>(&remote_server), sizeof(remote_server)) == -1) {
+        std::cerr << "Error binding to target server as client socket" << std::endl;
+        close(tcp_client);
+        return;
+    }
+    std::cout << "Connected to " << address << ":" << port << " from local port " << ntohs(servaddr.sin_port) << std::endl;
+
+    bidirec_traffic(client_socket, tcp_client); // Forward user input to the server
+    close(tcp_client);
+
+    return;
+}
+
 std::string get_atyp_info(int atyp, int client_socket) {
     // Determine address type based on ATYP
     int bytes_received = 0;
@@ -131,8 +205,10 @@ void handle_socks_request(int client_socket) {
     unsigned short port = recv(client_socket, buffer, 2, 0);
     char response[] = {SOCKS5VER, 0x00, RESERVED, address[0], address[1], address[2], address[3], port};
     if (cmd == 0x01) {
-
+        // set up TCP client and forward messages
         send(client_socket, response, sizeof(response), 0);
+        tcp_client(client_socket, address, port);
+        // send(client_socket, response, sizeof(response), 0);
     } else if (cmd == 0x02) {
         // BIND - CURRENTLY NOT SUPPORTED
         std::cerr << "Currently does not support BIND" << std::endl;
