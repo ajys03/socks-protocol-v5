@@ -1,5 +1,6 @@
 #include <iostream>
 #include <cstring>
+#include <vector>
 #include <unistd.h>
 #include <sys/socket.h>
 #include <arpa/inet.h>
@@ -7,25 +8,6 @@
 #define BUFFER_SIZE 4096
 const uint8_t SOCKS5VER = 0x05;
 const uint8_t RESERVED = 0x00;
-
-// std::string domain_to_ipv4(std::string domain_name) {
-//     // Convert the domain name to an IP address.
-//     struct sockaddr_in addr;
-//     addr.sin_family = AF_INET;
-//     addr.sin_port = htons(80); // Port 80 is the default HTTP port.
-//     addr.sin_addr.s_addr = inet_addr(domain_name.c_str());
-
-//     // Check if the IP address is valid.
-//     if (addr.sin_addr.s_addr == INADDR_NONE) {
-//         std::cerr << "Invalid domain name." << std::endl;
-//         return "error";
-//     }
-
-//     // Print the IP address to the console.
-//     std::cout << "The IP address for " << domain_name << " is " << inet_ntoa(addr.sin_addr) << std::endl;
-
-//     return inet_ntoa(addr.sin_addr);
-// }
 
 int handle_method_negotiation(const int client_socket) {
     char buffer[BUFFER_SIZE];
@@ -100,7 +82,7 @@ void bidirec_traffic(int client_socket, int tcp_client) {
 }
 
 
-void tcp_client(int client_socket, std::string address, unsigned short port) {
+void tcp_client(int client_socket, const char* address, ssize_t port) {
     int tcp_client = socket(AF_INET, SOCK_STREAM, 0);
     if (tcp_client < 0) {
         std::cerr << "Error creating local socket" << std::endl;
@@ -122,69 +104,51 @@ void tcp_client(int client_socket, std::string address, unsigned short port) {
     sockaddr_in remote_server;
     remote_server.sin_family = AF_INET;
     remote_server.sin_port = htons(port);
-    inet_pton(AF_INET, address.c_str(), &(remote_server.sin_addr));
-
+    inet_pton(AF_INET, address, &(remote_server.sin_addr));
     if (connect(tcp_client, reinterpret_cast<struct sockaddr*>(&remote_server), sizeof(remote_server)) == -1) {
         std::cerr << "Error binding to target server as client socket" << std::endl;
         close(tcp_client);
         return;
     }
+
     std::cout << "Connected to " << address << ":" << port << " from local port " << ntohs(servaddr.sin_port) << std::endl;
 
     bidirec_traffic(client_socket, tcp_client); // Forward user input to the server
     close(tcp_client);
 
-    return;
 }
 
-std::string get_atyp_info(int atyp, int client_socket) {
+char* get_atyp_info(int atyp, int client_socket) {
     // Determine address type based on ATYP
-    int bytes_received = 0;
+    ssize_t bytes_received = 0;
+    const char* err_msg = "ERROR";
     if (atyp == 0x01) {
         // IPv4 address
-        char ipv4_addr[4];
+        char* ipv4_addr = new char[4];
         bytes_received = recv(client_socket, ipv4_addr, 4, 0);
         if (bytes_received != 4) {
             std::cerr << "Error reading IPv4 address" << std::endl;
             close(client_socket);
-            return "e";
+            return const_cast<char *>(err_msg);
         }
         return ipv4_addr;
     } else if (atyp == 0x03) {
-        // Domain name
-        char domain_length[1];
-        bytes_received = recv(client_socket, domain_length, 1, 0);
-        if (bytes_received != 1) {
-            std::cerr << "Error reading domain length" << std::endl;
-            close(client_socket);
-            return "e";
-        }
-        int domain_length_int = static_cast<int>(domain_length[0]);
-        char domain_name[256];
-        bytes_received = recv(client_socket, domain_name, domain_length_int, 0);
-        if (bytes_received != domain_length_int) {
-            std::cerr << "Error reading domain name" << std::endl;
-            close(client_socket);
-            return "e";
-        }
-        // does not come with null terminating
-        domain_name[domain_length_int] = '\0';
-        // std::string domain_name_ipv4 = domain_to_ipv4(domain_name);
-        return domain_name;
+        std::cerr << "DOMAIN NAME NOT SUPPORTED" << std::endl;
+        return const_cast<char *>(err_msg);
     } else if (atyp == 0x04) {
         // IPv6 address
-        char ipv6_addr[6];
+        char* ipv6_addr = new char[6];
         bytes_received = recv(client_socket, ipv6_addr, 6, 0);
         if (bytes_received != 6) {
             std::cerr << "Error reading IPv4 address" << std::endl;
             close(client_socket);
-            return "e";
+            return const_cast<char *>(err_msg);
         }
         return ipv6_addr;
     } else {
         std::cerr << "ATYP does not exist" << std::endl;
         close(client_socket);
-        return "e";
+        return const_cast<char *>(err_msg);
     }
 }
 
@@ -198,32 +162,48 @@ void handle_socks_request(int client_socket) {
     }
 
     int cmd = static_cast<int>(buffer[1]);
-    int rsv = static_cast<int>(buffer[2]);
     int atyp = static_cast<int>(buffer[3]);
 
-    std::string address = get_atyp_info(atyp, client_socket);
-    unsigned short port = recv(client_socket, buffer, 2, 0);
-    char response[] = {SOCKS5VER, 0x00, RESERVED, address[0], address[1], address[2], address[3], port};
+    const char* address = get_atyp_info(atyp, client_socket);
+    if (std::strcmp(address, "ERROR") == 0) {
+        return;
+    }
+    ssize_t port = recv(client_socket, buffer, 2, 0);
+    char port_char[2];
+    snprintf(port_char, sizeof(port_char), "%zd", port);
+    std::vector<char> response;
+    if (atyp == 1) {
+        response.push_back(SOCKS5VER);
+        response.push_back(0x00);
+        response.push_back(RESERVED);
+        response.push_back(address[0]);
+        response.push_back(address[1]);
+        response.push_back(address[2]);
+        response.push_back(address[3]);
+        response.push_back(port_char[0]);
+        response.push_back(port_char[1]);
+    } else if (atyp == 3) {
+        std::cerr << "currently domain name not supported" << std::endl;
+        return;
+    } else if (atyp == 4){
+        std::cerr << "currently IPV6 not supported" << std::endl;
+        return;
+    }
     if (cmd == 0x01) {
         // set up TCP client and forward messages
-        send(client_socket, response, sizeof(response), 0);
+        send(client_socket, response.data(), response.size(), 0);
         tcp_client(client_socket, address, port);
-        // send(client_socket, response, sizeof(response), 0);
     } else if (cmd == 0x02) {
         // BIND - CURRENTLY NOT SUPPORTED
         std::cerr << "Currently does not support BIND" << std::endl;
-        close(client_socket);
-        return;
     } else if (cmd == 0x03) {
         // UDP ASSOCIATE - WILL NOT IMPLEMENT
         std::cerr << "This Implemention skips UDP Associate" << std::endl;
-        close(client_socket);
-        return;
     } else {
         std::cerr << "Command does not exist" << std::endl;
-        close(client_socket);
-        return;
     }
+    delete[] address;
+    close(client_socket);
 }
 
 int main() {
@@ -283,7 +263,6 @@ int main() {
 
         std::cout << "Completed SOCKS 5" << std::endl;
     }
-
     close(server_fd);
 
     return 0;
