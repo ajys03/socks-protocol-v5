@@ -1,9 +1,14 @@
 #include <iostream>
 #include <cstring>
-#include <vector>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
 #include <arpa/inet.h>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netdb.h>
+
+typedef unsigned __int128 uint128_t;
 
 const int BUFFER_SIZE = 4096;
 const int SOCKS5VER = 0x05;
@@ -49,11 +54,29 @@ int handle_method_negotiation(const int client_socket) {
 }
 
 void send_reply(const int client_socket, uint8_t reply_type, int addr_type) {
+    // TODO: use reply_type
     if (addr_type == 0x01) {
         char data_to_send[10] = {
                 SOCKS5VER,0x00,RESERVED,0x01,
                 BND_ADDR_IPV4[0],BND_ADDR_IPV4[1],BND_ADDR_IPV4[2],
                 BND_ADDR_IPV4[3], BND_PORT[0], BND_PORT[1]
+        };
+        send(client_socket, data_to_send, sizeof(data_to_send), 0);
+    } else if (addr_type == 0x03) {
+        char data_to_send[10] = {
+                SOCKS5VER,0x00,RESERVED,0x03,
+                BND_ADDR_IPV4[0],BND_ADDR_IPV4[1],BND_ADDR_IPV4[2],
+                BND_ADDR_IPV4[3], BND_PORT[0], BND_PORT[1]
+        };
+        send(client_socket, data_to_send, sizeof(data_to_send), 0);
+    } else {
+        char data_to_send[22] = {
+                SOCKS5VER,0x00,RESERVED,0x04,
+                BND_ADDR_IPV6[0],BND_ADDR_IPV6[1],BND_ADDR_IPV6[2],
+                BND_ADDR_IPV6[3], BND_ADDR_IPV6[4],BND_ADDR_IPV6[5],BND_ADDR_IPV6[6],
+                BND_ADDR_IPV6[7],BND_ADDR_IPV6[8],BND_ADDR_IPV6[9],BND_ADDR_IPV6[10],
+                BND_ADDR_IPV6[11],BND_ADDR_IPV6[12],BND_ADDR_IPV6[13],BND_ADDR_IPV6[14],
+                BND_ADDR_IPV6[15],BND_PORT[0], BND_PORT[1]
         };
         send(client_socket, data_to_send, sizeof(data_to_send), 0);
     }
@@ -104,21 +127,126 @@ int handle_ipv4(const int client_socket) {
     return dest_socket;
 }
 
+int handle_dname(const int client_socket) {
+    uint8_t reply_type = 0x00;
+
+    uint8_t len;
+    ssize_t reply = recv(client_socket, &len, 1, 0);
+    if (reply != 1) {
+        std::cerr << "Error reading domain name address's length" << std::endl;
+        reply_type = 0x01;
+    }
+
+    char domain_name[len + 1];
+    reply = recv(client_socket, domain_name, len, 0);
+    if (reply != len) {
+        std::cerr << "Error reading domain name address" << std::endl;
+        reply_type = 0x01;
+    }
+    domain_name[len] = '\0';
+
+    uint8_t port[2];
+    reply = recv(client_socket, port, 2, 0);
+    if (reply != 2) {
+        std::cerr << "Error reading IPv4 address's port" << std::endl;
+        reply_type = 0x01;
+    }
+
+    uint16_t port_number = (port[0] << 8) | port[1];
+
+    std::string port_str = std::to_string(port_number);
+    const char* port_char = port_str.c_str();
+
+    int dest_socket = socket(AF_INET, SOCK_STREAM, 0);
+    if (dest_socket == -1) {
+        std::cerr << "Error creating socket for proxy" << std::endl;
+        reply_type = 0x01;
+    }
+
+    struct addrinfo hints = {}, *serverInfo;
+    std::memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+
+    if (getaddrinfo(domain_name, port_char, &hints, &serverInfo) != 0) {
+        std::cerr << "Error getting server address" << std::endl;
+        reply_type = 0x01;
+    }
+
+    if (connect(dest_socket, serverInfo->ai_addr, serverInfo->ai_addrlen) == -1) {
+        std::cerr << "Error connecting to the server" << std::endl;
+        close(dest_socket);
+        close(client_socket);
+        freeaddrinfo(serverInfo);
+        reply_type = 0x01;
+    }
+
+    send_reply(client_socket, reply_type, 0x03);
+
+    return dest_socket;
+}
+
+int handle_ipv6(const int client_socket) {
+    uint8_t reply_type = 0x00;
+
+    uint8_t ipv6_addr[16];
+    ssize_t reply = recv(client_socket, ipv6_addr, 16, 0);
+
+    if (reply != 16) {
+        std::cerr << "Error reading IPv6 address" << std::endl;
+        reply_type = 0x01;
+    }
+
+    uint128_t ip_address = 0;
+    for (uint8_t byte : ipv6_addr) {
+        ip_address = (ip_address << 8) | byte;
+    }
+
+    uint8_t port[2];
+    reply = recv(client_socket, port, 2, 0);
+    if (reply != 2) {
+        std::cerr << "Error reading IPv4 address's port" << std::endl;
+        reply_type = 0x01;
+    }
+
+    uint16_t port_number = (port[0] << 8) | port[1];
+
+    int dest_socket = socket(AF_INET6, SOCK_STREAM, 0);
+    if (dest_socket == -1) {
+        std::cerr << "Error creating socket for proxy" << std::endl;
+        reply_type = 0x01;
+    }
+
+    sockaddr_in6 dest_address = {};
+    dest_address.sin6_family = AF_INET6;
+    dest_address.sin6_port = htons(port_number);
+    memcpy(&(dest_address.sin6_addr), &ip_address, sizeof(ip_address));
+
+    if (connect(dest_socket, (struct sockaddr *)&dest_address, sizeof(dest_address)) == -1) {
+        std::cerr << "Error connecting to server" << std::endl;
+        close(dest_socket);
+        close(client_socket);
+        return -1;
+    }
+
+    send_reply(client_socket, reply_type, 0x04);
+
+    return dest_socket;
+}
+
 void connect_req(const int client_socket, const int addr_type) {
     int host_socket;
     if (addr_type == 0x01) {
         host_socket = handle_ipv4(client_socket);
     } else if (addr_type == 0x03) {
-        // DOMAIN NAME
-        host_socket = -1;
+        host_socket = handle_dname(client_socket);
     } else if (addr_type == 0x04) {
-        // IPv6
-        host_socket = -1;
+        host_socket = handle_ipv6(client_socket);
     } else {
         host_socket = -1;
     }
 
-    if (host_socket == -1) {
+    if (host_socket <= -1) {
         std::cerr << "Error connecting to dest address" << std::endl;
     }
 
@@ -127,15 +255,13 @@ void connect_req(const int client_socket, const int addr_type) {
 
     while(true){
         std::cout << "cycle" << "\n";
-        // recv data from client_socket
         count = recv(client_socket, buffer, sizeof(buffer), 0);
-        if(count > 0 ){
+        if(count > 0){
             count = send(host_socket, buffer, count, 0);
             // maybe error handle
         }
-        // recv data from the host_socket
         count = recv(host_socket, buffer, sizeof(buffer), 0);
-        if(count > 0 ) {
+        if(count > 0) {
             count = send(client_socket, buffer, count, 0);
         }
     }
@@ -171,7 +297,7 @@ int main() {
     }
 
     // BIND SOCKET
-    sockaddr_in servaddr;
+    sockaddr_in servaddr = {};
     servaddr.sin_family = AF_INET;
     servaddr.sin_port = htons(1080);
     servaddr.sin_addr.s_addr = INADDR_ANY;
@@ -193,7 +319,7 @@ int main() {
     std::cout << "SOCKS 5 proxy server listening on port 1080..." << std::endl;
 
     while (true) {
-        sockaddr_in client_address;
+        sockaddr_in client_address = {};
         socklen_t client_address_size = sizeof(client_address);
         int client_socket = accept(server_fd, reinterpret_cast<struct sockaddr*>(&client_address), &client_address_size);
 
