@@ -48,7 +48,7 @@ int handle_method_negotiation(const int client_socket) {
     return 0;
 }
 
-void send_reply(const int client_socket, char reply_type, int addr_type) {
+void send_reply(const int client_socket, uint8_t reply_type, int addr_type) {
     if (addr_type == 0x01) {
         char data_to_send[10] = {
                 SOCKS5VER,0x00,RESERVED,0x01,
@@ -59,83 +59,90 @@ void send_reply(const int client_socket, char reply_type, int addr_type) {
     }
 }
 
-int proxy_ipv4(const int client_socket, const char* dest_addr, const char* dest_port) {
+int handle_ipv4(const int client_socket) {
+    uint8_t reply_type = 0x00;
+
+    uint8_t ipv4_addr[4];
+    ssize_t reply = recv(client_socket, ipv4_addr, 4, 0);
+
+    if (reply != 4) {
+        std::cerr << "Error reading IPv4 address" << std::endl;
+        reply_type = 0x01;
+    }
+
+    uint32_t ip_address =(ipv4_addr[0] << 24) | (ipv4_addr[1] << 16) | (ipv4_addr[2] << 8) | ipv4_addr[3];
+
+    uint8_t port[2];
+    reply = recv(client_socket, port, 2, 0);
+    if (reply != 2) {
+        std::cerr << "Error reading IPv4 address's port" << std::endl;
+        reply_type = 0x01;
+    }
+
+    uint16_t port_number = (port[0] << 8) | port[1];
+
     int dest_socket = socket(AF_INET, SOCK_STREAM, 0);
     if (dest_socket == -1) {
         std::cerr << "Error creating socket for proxy" << std::endl;
-        close(dest_socket);
-        close(client_socket);
-        return -1;
+        reply_type = 0x01;
     }
 
-    sockaddr_in dest_address;
+    sockaddr_in dest_address = {};
     dest_address.sin_family = AF_INET;
-    dest_address.sin_port = htons(std::stoi(dest_port));
+    dest_address.sin_port = htons(port_number);
+    dest_address.sin_addr.s_addr = ip_address;
 
-    if (inet_pton(AF_INET, dest_addr, &dest_address.sin_addr) <= 0) {
-        std::cerr << "Error converting server address" << std::endl;
-        close(dest_socket);
-        close(client_socket);
-        return -1;
-    }
-
-    if (connect(client_socket, (struct sockaddr *)&dest_address, sizeof(dest_address)) == -1) {
+    if (connect(dest_socket, (struct sockaddr *)&dest_address, sizeof(dest_address)) == -1) {
         std::cerr << "Error connecting to server" << std::endl;
         close(dest_socket);
         close(client_socket);
         return -1;
     }
 
-    char buffer[BUFFER_SIZE];
-    ssize_t client_reply = 0;
-    while ((client_reply = recv(client_socket, buffer, sizeof(buffer), 0)) > 0) {
-        buffer[client_reply] = '\0';
-
-        // Relay data from client_socket to dest_socket
-        send(dest_socket, buffer, client_reply, 0);
-
-        // Receive data from dest_socket and relay it back to client_socket
-        int dest_bytes_received = recv(dest_socket, buffer, sizeof(buffer), 0);
-        if (dest_bytes_received > 0) {
-            buffer[dest_bytes_received] = '\0';
-            send(client_socket, buffer, dest_bytes_received, 0);
-        }
-    }
-
-    return 0;
-}
-
-void handle_ipv4(const int client_socket) {
-    char reply_type = 0x00;
-    char ipv4_addr[4];
-    ssize_t reply = recv(client_socket, ipv4_addr, 4, 0);
-    if (reply != 4) {
-        std::cerr << "Error reading IPv4 address" << std::endl;
-        reply_type = 0x01;
-    }
-    char port[2];
-    ssize_t reply0 = recv(client_socket, port, 2, 0);
-    if (reply0 != 2) {
-        std::cerr << "Error reading IPv4 address's port" << std::endl;
-        reply_type = 0x01;
-    }
-
-    if (proxy_ipv4(client_socket, ipv4_addr, port) == -1) {
-        reply_type = 0x01;
-    }
-
     send_reply(client_socket, reply_type, 0x01);
+
+    return dest_socket;
 }
 
 void connect_req(const int client_socket, const int addr_type) {
+    int host_socket;
     if (addr_type == 0x01) {
-        handle_ipv4(client_socket);
+        host_socket = handle_ipv4(client_socket);
+    } else if (addr_type == 0x03) {
+        // DOMAIN NAME
+        host_socket = -1;
+    } else if (addr_type == 0x04) {
+        // IPv6
+        host_socket = -1;
+    } else {
+        host_socket = -1;
     }
 
+    if (host_socket == -1) {
+        std::cerr << "Error connecting to dest address" << std::endl;
+    }
+
+    char buffer[BUFFER_SIZE];
+    ssize_t count;
+
+    while(true){
+        std::cout << "cycle" << "\n";
+        // recv data from client_socket
+        count = recv(client_socket, buffer, sizeof(buffer), 0);
+        if(count > 0 ){
+            count = send(host_socket, buffer, count, 0);
+            // maybe error handle
+        }
+        // recv data from the host_socket
+        count = recv(host_socket, buffer, sizeof(buffer), 0);
+        if(count > 0 ) {
+            count = send(client_socket, buffer, count, 0);
+        }
+    }
 }
 
 void handle_socks_request(const int client_socket) {
-    char buffer[BUFFER_SIZE];
+    uint8_t buffer[BUFFER_SIZE];
     ssize_t bytes_received = recv(client_socket, buffer, 4, 0);
     if (bytes_received != 4 || buffer[0] != SOCKS5VER) {
         std::cerr << "Invalid SOCKS version or request" << std::endl;
@@ -143,8 +150,8 @@ void handle_socks_request(const int client_socket) {
         return;
     }
 
-    int cmd = static_cast<int>(static_cast<unsigned char>(buffer[1]));
-    int addr_type = static_cast<int>(static_cast<unsigned char>(buffer[3]));
+    uint8_t cmd = buffer[1];
+    uint8_t addr_type = buffer[3];
 
     if (cmd == 0x01) {
         std::cout << "Received SOCKS CONNECT request." << std::endl;
