@@ -5,8 +5,9 @@
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <sys/types.h>
-#include <sys/socket.h>
+#include <fcntl.h>
 #include <netdb.h>
+#include <thread>
 
 typedef unsigned __int128 uint128_t;
 
@@ -57,21 +58,21 @@ void send_reply(const int client_socket, uint8_t reply_type, int addr_type) {
     // TODO: use reply_type
     if (addr_type == 0x01) {
         char data_to_send[10] = {
-                SOCKS5VER,0x00,RESERVED,0x01,
+                SOCKS5VER,static_cast<char>(reply_type),RESERVED,0x01,
                 BND_ADDR_IPV4[0],BND_ADDR_IPV4[1],BND_ADDR_IPV4[2],
                 BND_ADDR_IPV4[3], BND_PORT[0], BND_PORT[1]
         };
         send(client_socket, data_to_send, sizeof(data_to_send), 0);
     } else if (addr_type == 0x03) {
         char data_to_send[10] = {
-                SOCKS5VER,0x00,RESERVED,0x03,
+                SOCKS5VER,static_cast<char>(reply_type),RESERVED,0x03,
                 BND_ADDR_IPV4[0],BND_ADDR_IPV4[1],BND_ADDR_IPV4[2],
                 BND_ADDR_IPV4[3], BND_PORT[0], BND_PORT[1]
         };
         send(client_socket, data_to_send, sizeof(data_to_send), 0);
     } else {
         char data_to_send[22] = {
-                SOCKS5VER,0x00,RESERVED,0x04,
+                SOCKS5VER,static_cast<char>(reply_type),RESERVED,0x04,
                 BND_ADDR_IPV6[0],BND_ADDR_IPV6[1],BND_ADDR_IPV6[2],
                 BND_ADDR_IPV6[3], BND_ADDR_IPV6[4],BND_ADDR_IPV6[5],BND_ADDR_IPV6[6],
                 BND_ADDR_IPV6[7],BND_ADDR_IPV6[8],BND_ADDR_IPV6[9],BND_ADDR_IPV6[10],
@@ -186,6 +187,7 @@ int handle_dname(const int client_socket) {
     return dest_socket;
 }
 
+// TODO: test
 int handle_ipv6(const int client_socket) {
     uint8_t reply_type = 0x00;
 
@@ -252,19 +254,35 @@ void connect_req(const int client_socket, const int addr_type) {
 
     char buffer[BUFFER_SIZE];
     ssize_t count;
+    if(fcntl(client_socket, F_SETFL, fcntl(client_socket, F_GETFL) | O_NONBLOCK) < 0) {
+        std::cerr << "Unable to non-block client_socket" << std::endl;
+    }
+    if(fcntl(host_socket, F_SETFL, fcntl(host_socket, F_GETFL) | O_NONBLOCK) < 0) {
+        std::cerr << "Unable to non-block host_socket" << std::endl;
+    }
+
 
     while(true){
         std::cout << "cycle" << "\n";
+
         count = recv(client_socket, buffer, sizeof(buffer), 0);
-        if(count > 0){
+        if (count == 0) {
+            break;
+        } else if (count > 0) {
             count = send(host_socket, buffer, count, 0);
-            // maybe error handle
         }
+
         count = recv(host_socket, buffer, sizeof(buffer), 0);
-        if(count > 0) {
+        if (count == 0) {
+            break;
+        }
+        else if (count > 0) {
             count = send(client_socket, buffer, count, 0);
         }
     }
+
+    close(client_socket);
+    close(host_socket);
 }
 
 void handle_socks_request(const int client_socket) {
@@ -284,6 +302,21 @@ void handle_socks_request(const int client_socket) {
         connect_req(client_socket, addr_type);
     }
 
+}
+
+void handle_client(int client_socket) {
+    // HANDLE METHOD NEGOTIATION
+    int neg_success = handle_method_negotiation(client_socket);
+    if (neg_success < 0) {
+        std::cerr << "Error negotiating methods" << std::endl;
+        close(client_socket);
+        return;
+    }
+
+    // REQUESTS + REPLIES
+    handle_socks_request(client_socket);
+
+    std::cout << "Completed SOCKS 5 for client" << std::endl;
 }
 
 int main() {
@@ -330,19 +363,10 @@ int main() {
         
         std::cout << "Accepted connection from " << inet_ntoa(client_address.sin_addr) << std::endl;
 
-        // HANDLE METHOD NEGOTIATION
-        int neg_success = handle_method_negotiation(client_socket);
-        if (neg_success < 0) {
-            std::cerr << "Error negotiating methods" << std::endl;
-            close(client_socket);
-            close(server_fd);
-            return -1;
-        }
-
         // REQUESTS + REPLIES
-        handle_socks_request(client_socket);
+        std::thread t(handle_client, std::ref(client_socket));
 
-        std::cout << "Completed SOCKS 5" << std::endl;
+        t.detach();
     }
-
+    std::cout << "Completed SOCKS 5" << std::endl;
 }
