@@ -1,0 +1,9 @@
+# Ignore IntelliJ IDEA project files
+.idea/
+
+# Ignore macOS specific files
+main.dSYM/
+
+# Ignore compiled output files
+a.out
+main
