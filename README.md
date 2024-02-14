@@ -1,5 +1,5 @@
 # socks-protocol-v5
-<a href="https://readme.com/](https://pages.github.com/](https://datatracker.ietf.org/doc/html/rfc1928#autoid-2" target="_blank">SOCKS Protocol Version 5</a>
+[SOCKS Protocol Version 5](https://datatracker.ietf.org/doc/html/rfc1928#autoid-2)
 
 Use this command to test:
 ``` curl -vvv  -x socks5h://127.0.0.1:1080 https://1.1.1.1```.
